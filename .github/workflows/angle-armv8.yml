@@ -220,7 +220,7 @@ jobs:
 
           text = path.read_text(encoding="utf-8")
 
-          # Fixes the invalid path:
+          # Corrige o caminho inválido:
           # import("//build_overrides//vulkan_headers.gni")
           text = text.replace(
               'import("//build_overrides//vulkan_headers.gni")',
@@ -334,7 +334,9 @@ jobs:
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          autoninja \
+          # Use o Ninja diretamente para o modo -t targets.
+          # O autoninja pode usar o Siso, que não suporta esse modo.
+          ninja \
             -C out/AndroidArmv8 \
             -t targets \
             > "$GITHUB_WORKSPACE/angle-targets.txt"
