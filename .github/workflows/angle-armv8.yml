@@ -23,16 +23,50 @@ jobs:
           sudo apt-get update
 
           sudo apt-get install -y \
-            git python3 python3-pip python3-venv \
-            curl wget unzip zip xz-utils bzip2 \
-            ninja-build clang lld build-essential pkg-config \
-            libx11-dev libx11-xcb-dev libxcb1-dev libxext-dev \
-            libxfixes-dev libxrandr-dev libxdamage-dev libxcomposite-dev \
-            libxcursor-dev libxi-dev libxtst-dev libdrm-dev libgbm-dev \
-            libegl1-mesa-dev libgles2-mesa-dev mesa-common-dev \
-            libwayland-dev wayland-protocols libwayland-egl-backend-dev \
-            libvulkan-dev vulkan-tools libudev-dev libpulse-dev \
-            libasound2-dev libnss3-dev libnspr4-dev libgtk-3-dev \
+            git \
+            python3 \
+            python3-pip \
+            python3-venv \
+            curl \
+            wget \
+            unzip \
+            zip \
+            xz-utils \
+            bzip2 \
+            ninja-build \
+            clang \
+            lld \
+            build-essential \
+            pkg-config \
+            file \
+            binutils \
+            libx11-dev \
+            libx11-xcb-dev \
+            libxcb1-dev \
+            libxext-dev \
+            libxfixes-dev \
+            libxrandr-dev \
+            libxdamage-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxi-dev \
+            libxtst-dev \
+            libdrm-dev \
+            libgbm-dev \
+            libegl1-mesa-dev \
+            libgles2-mesa-dev \
+            mesa-common-dev \
+            libwayland-dev \
+            wayland-protocols \
+            libwayland-egl-backend-dev \
+            libvulkan-dev \
+            vulkan-tools \
+            libudev-dev \
+            libpulse-dev \
+            libasound2-dev \
+            libnss3-dev \
+            libnspr4-dev \
+            libgtk-3-dev \
             ccache
 
       - name: Configure ccache
@@ -110,7 +144,7 @@ jobs:
 
           gclient sync --force --no-history --shallow
 
-      - name: Run ANGLE build dependencies
+      - name: Install ANGLE build dependencies
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
@@ -148,7 +182,7 @@ jobs:
 
           test -d build/linux/debian_bullseye_amd64-sysroot
 
-      - name: Ensure real GN binary exists
+      - name: Ensure GN binary exists
         working-directory: ${{ github.workspace }}
         shell: bash
         run: |
@@ -159,12 +193,9 @@ jobs:
           mkdir -p angle/buildtools/linux64
 
           if [ -x angle/buildtools/linux64/gn ]; then
-            echo "GN already present"
             angle/buildtools/linux64/gn --version
             exit 0
           fi
-
-          echo "GN missing — installing via CIPD"
 
           rm -rf /tmp/gn-cipd
           mkdir -p /tmp/gn-cipd
@@ -178,11 +209,13 @@ jobs:
             -root /tmp/gn-cipd \
             -ensure-file /tmp/gn.ensure
 
-          GN_SRC="$(find /tmp/gn-cipd \
-            -type f \
-            -name gn \
-            -perm -111 \
-            | head -1)"
+          GN_SRC="$(
+            find /tmp/gn-cipd \
+              -type f \
+              -name gn \
+              -perm -111 \
+              | head -1
+          )"
 
           if [ -z "$GN_SRC" ]; then
             rm -rf /tmp/gn-cipd
@@ -197,11 +230,13 @@ jobs:
               -root /tmp/gn-cipd \
               -ensure-file /tmp/gn.ensure
 
-            GN_SRC="$(find /tmp/gn-cipd \
-              -type f \
-              -name gn \
-              -perm -111 \
-              | head -1)"
+            GN_SRC="$(
+              find /tmp/gn-cipd \
+                -type f \
+                -name gn \
+                -perm -111 \
+                | head -1
+            )"
           fi
 
           test -n "$GN_SRC"
@@ -223,13 +258,11 @@ jobs:
               build_overrides/BUILD.gn
           fi
 
-      - name: Patch arm.gni to force ARMv8.0
+      - name: Force ARMv8.0-A source configuration
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
           set -euxo pipefail
-
-          export PATH="$HOME/depot_tools:$PATH"
 
           python3 - <<'PY'
           from pathlib import Path
@@ -253,29 +286,27 @@ jobs:
 
               original = text
 
-              text = re.sub(
-                  r'arm_arch\s*=\s*"[^"]*"',
-                  'arm_arch = "armv8-a"',
-                  text,
-              )
+              replacements = [
+                  (
+                      r'arm_arch\s*=\s*"[^"]*"',
+                      'arm_arch = "armv8-a"',
+                  ),
+                  (
+                      r'arm_tune\s*=\s*"[^"]*"',
+                      'arm_tune = "generic"',
+                  ),
+                  (
+                      r'arm_use_crc\s*=\s*true',
+                      'arm_use_crc = false',
+                  ),
+                  (
+                      r'arm_use_lse\s*=\s*true',
+                      'arm_use_lse = false',
+                  ),
+              ]
 
-              text = re.sub(
-                  r'arm_tune\s*=\s*"[^"]*"',
-                  'arm_tune = "generic"',
-                  text,
-              )
-
-              text = re.sub(
-                  r'arm_use_crc\s*=\s*true',
-                  'arm_use_crc = false',
-                  text,
-              )
-
-              text = re.sub(
-                  r'arm_use_lse\s*=\s*true',
-                  'arm_use_lse = false',
-                  text,
-              )
+              for pattern, replacement in replacements:
+                  text = re.sub(pattern, replacement, text)
 
               text = re.sub(
                   r'(-march=armv[^"\'\s]*?)'
@@ -291,10 +322,6 @@ jobs:
                   print(f"no change: {path}")
           PY
 
-          echo ""
-          echo "🔍 Verificando configurações ARMv8.0"
-          echo "===================================="
-
           LEAKS="$(
             grep -rnE \
               '\+lse|\+crc|arm_use_lse[[:space:]]*=[[:space:]]*true|arm_use_crc[[:space:]]*=[[:space:]]*true' \
@@ -305,12 +332,12 @@ jobs:
           )"
 
           if [ -n "$LEAKS" ]; then
-            echo "❌ Configurações proibidas encontradas:"
+            echo "❌ ARMv8.1+ configuration found:"
             echo "$LEAKS"
             exit 1
           fi
 
-          echo "✅ Nenhuma configuração LSE/CRC ativa nos sources GN."
+          echo "✅ No LSE/CRC ARM configuration found."
 
       - name: Generate GN configuration
         working-directory: ${{ github.workspace }}/angle
@@ -332,23 +359,22 @@ jobs:
           is_component_build = false
           is_official_build = false
           symbol_level = 0
-          enable_nacl = false
 
+          enable_nacl = false
+          use_remoteexec = false
+          clang_use_chrome_plugins = false
+
+          # Strict ARMv8.0-A build.
           use_thin_lto = false
           use_lto = false
           lto_unit_merging = false
           thin_lto_enable_optimizations = false
-
-          use_remoteexec = false
-          clang_use_chrome_plugins = false
 
           is_cfi = false
           arm_control_flow_integrity = "none"
 
           android_ndk_api_level = 26
 
-          # ARMv8.0 בלבד:
-          # sem LSE, CRC e extensões ARMv8.1+.
           arm_arch = "armv8-a"
           arm_tune = "generic"
           arm_use_neon = true
@@ -356,7 +382,10 @@ jobs:
           arm_use_crc = false
           arm_use_lse = false
 
+          angle_armv80_strict = true
+
           angle_expose_non_conformant_extensions_and_versions = false
+
           angle_enable_vulkan = true
           angle_enable_gl = false
           angle_enable_d3d11 = false
@@ -364,10 +393,17 @@ jobs:
           angle_enable_swiftshader = false
           angle_enable_null = false
           angle_enable_wgpu = false
+          angle_enable_cl = false
+          angle_enable_cl_passthrough = false
+
           angle_enable_vulkan_validation_layers = false
+          angle_enable_vulkan_api_dump_layer = false
           angle_enable_vulkan_trace = false
+          angle_debug_layers_enabled = false
           angle_vulkan_display_mode = "simple"
+
           angle_libs_suffix = "_angle"
+
           angle_build_tests = false
           angle_build_samples = false
           angle_build_perftests = false
@@ -375,13 +411,28 @@ jobs:
           use_custom_libcxx = false
           treat_warnings_as_errors = false
 
-          # Bloqueia geração de instruções ARMv8.1+.
+          angle_enable_trace = false
+          angle_enable_trace_android_logcat = false
+          angle_enable_trace_events = false
+          angle_enable_memory_alloc_logging = false
+          angle_enable_unwind_backtrace_support = false
+
+          checkout_angle_partition_alloc = false
+          angle_use_partition_alloc = false
+
+          # These flags apply to Android ARM64 target commands.
           extra_cflags = [
             "-march=armv8-a",
             "-mtune=generic",
             "-mno-outline-atomics",
             "-mno-lse",
             "-mno-crc",
+            "-mno-fp16",
+            "-mno-dotprod",
+            "-mno-sve",
+            "-mno-sve2",
+            "-mno-i8mm",
+            "-mno-bf16",
             "-Wno-error",
           ]
 
@@ -391,17 +442,19 @@ jobs:
             "-mno-outline-atomics",
             "-mno-lse",
             "-mno-crc",
+            "-mno-fp16",
+            "-mno-dotprod",
+            "-mno-sve",
+            "-mno-sve2",
+            "-mno-i8mm",
+            "-mno-bf16",
             "-Wno-error",
           ]
 
           extra_asmflags = [
             "-march=armv8-a",
+            "-mno-outline-atomics",
             "-mno-crc",
-          ]
-
-          extra_ldflags = [
-            "-Wl,--mllvm,-aarch64-enable-lse-atomics=false",
-            "-Wl,-plugin-opt=-aarch64-enable-lse-atomics=false",
           ]
           EOF
 
@@ -409,27 +462,29 @@ jobs:
 
           buildtools/linux64/gn gen out/AndroidArmv8
 
-          echo ""
-          echo "🔍 Verificando flags geradas no Ninja"
-          echo "===================================="
+      - name: Verify generated target flags
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export PATH="$HOME/depot_tools:$PATH"
 
           ninja -C out/AndroidArmv8 -t commands \
-            > /tmp/ninja-cmds.txt
+            > /tmp/ninja-commands.txt
 
-          FORBIDDEN_FLAGS="$(
-            grep -nE \
-              '\+lse|\+crc|-march=armv8\.[1-9]|-mcpu=.*lse|-moutline-atomics' \
-              /tmp/ninja-cmds.txt \
-              | head -30 || true
-          )"
+          echo "Checking generated ARM flags..."
 
-          if [ -n "$FORBIDDEN_FLAGS" ]; then
-            echo "❌ Flags ARMv8.1+ presentes no Ninja:"
-            echo "$FORBIDDEN_FLAGS"
+          if grep -nE \
+            -- \
+            '\+lse|\+crc|-march=armv8\.[1-9]|-mcpu=[^ ]*(native|armv8\.[1-9])|-moutline-atomics' \
+            /tmp/ninja-commands.txt \
+            | head -30; then
+            echo "❌ Forbidden ARMv8.1+ compiler flags found."
             exit 1
           fi
 
-          echo "✅ Nenhuma flag ARMv8.1+ detectada no Ninja."
+          echo "✅ No forbidden ARMv8.1+ compiler flags found."
 
       - name: Build shared libraries
         working-directory: ${{ github.workspace }}/angle
@@ -444,9 +499,11 @@ jobs:
             libGLESv2 \
             libGLESv1_CM
 
-          echo ""
-          echo "🔍 Verificação pós-link das bibliotecas"
-          echo "======================================"
+      - name: Verify final ARMv8.0 shared libraries
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euo pipefail
 
           OBJDUMP="$(
             find third_party/llvm-build \
@@ -461,47 +518,80 @@ jobs:
 
           FAILED=0
 
-          for lib in \
-            out/AndroidArmv8/libEGL_angle.so \
-            out/AndroidArmv8/libGLESv2_angle.so \
-            out/AndroidArmv8/libGLESv1_CM_angle.so; do
+          check_library() {
+            local lib="$1"
 
-            echo "Scanning $lib ..."
+            echo ""
+            echo "========================================"
+            echo "Verifying: $lib"
+            echo "========================================"
 
-            "$OBJDUMP" -d "$lib" > /tmp/sherlock_so.asm
+            if [ ! -f "$lib" ]; then
+              echo "❌ Missing library: $lib"
+              FAILED=1
+              return
+            fi
 
-            HITS="$(
+            local file_info
+            file_info="$(file "$lib")"
+
+            echo "$file_info"
+
+            if ! echo "$file_info" | grep -Eq \
+              'ELF 64-bit LSB shared object, ARM aarch64'; then
+              echo "❌ Not an ARM64 Android shared library: $lib"
+              FAILED=1
+              return
+            fi
+
+            if ! readelf -h "$lib" | grep -q 'Class:.*ELF64'; then
+              echo "❌ $lib is not ELF64"
+              FAILED=1
+              return
+            fi
+
+            if ! readelf -h "$lib" | grep -q 'Machine:.*AArch64'; then
+              echo "❌ $lib is not AArch64"
+              FAILED=1
+              return
+            fi
+
+            "$OBJDUMP" \
+              --arch-name=aarch64 \
+              -d "$lib" \
+              > /tmp/armv80-library.asm
+
+            local hits
+            hits="$(
               grep -Ein \
-                '\b(ldadd|ldclr|ldeor|ldset|swp[a-z]*|casp?[a-z]*|stadd|stclr|steor|stset|crc32[a-z]*|sdot|udot|fmlal|fcmla|bfmmla)\b' \
-                /tmp/sherlock_so.asm \
+                '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmmla|bfdot|usmmla|smmla|ptrue|whilelo|whilelt|sqaddv|sqsubv)\b' \
+                /tmp/armv80-library.asm \
                 | head -30 || true
             )"
 
-            if [ -n "$HITS" ]; then
-              echo "❌ Instruções proibidas encontradas em $lib:"
-              echo "$HITS"
-              echo ""
-              echo "Objetos potencialmente responsáveis:"
-
-              find out/AndroidArmv8 -name '*.o' \
-                | while read -r obj; do
-                    if "$OBJDUMP" -d "$obj" 2>/dev/null \
-                      | grep -Eiq \
-                        '\b(ldadd|ldclr|ldeor|ldset|swp[a-z]*|casp?[a-z]*|stadd|stclr|steor|stset|crc32[a-z]*|sdot|udot|fmlal)\b'; then
-                      echo "  $obj"
-                    fi
-                  done \
-                | head -20
-
+            if [ -n "$hits" ]; then
+              echo "❌ ARMv8.1+ instructions found in $lib:"
+              echo "$hits"
               FAILED=1
             else
-              echo "✅ OK: $lib"
+              echo "✅ ARMv8.0-only: $lib"
             fi
-          done
+
+            rm -f /tmp/armv80-library.asm
+          }
+
+          check_library out/AndroidArmv8/libEGL_angle.so
+          check_library out/AndroidArmv8/libGLESv2_angle.so
+          check_library out/AndroidArmv8/libGLESv1_CM_angle.so
 
           if [ "$FAILED" -ne 0 ]; then
+            echo ""
+            echo "❌ One or more final ARM64 libraries failed validation."
             exit 1
           fi
+
+          echo ""
+          echo "✅ All final shared libraries passed ARMv8.0 validation."
 
       - name: Discover static targets
         working-directory: ${{ github.workspace }}/angle
@@ -509,10 +599,8 @@ jobs:
         run: |
           set -euxo pipefail
 
-          export PATH="$HOME/depot_tools:$PATH"
-
-          ninja -C out/AndroidArmv8 -t targets \
-            | grep -E '\.a($| )' \
+          ninja -C out/AndroidArmv8 -t targets all \
+            | awk '$1 ~ /\.a$/ { print $1 }' \
             | sort -u \
             > static-targets.txt || true
 
@@ -527,10 +615,10 @@ jobs:
           export PATH="$HOME/depot_tools:$PATH"
 
           if [ -s static-targets.txt ]; then
-            while read -r target; do
+            while IFS= read -r target; do
               [ -z "$target" ] && continue
 
-              echo "Building: $target"
+              echo "Building static target: $target"
 
               autoninja -C out/AndroidArmv8 "$target"
             done < static-targets.txt
@@ -538,9 +626,11 @@ jobs:
             echo "No static targets found."
           fi
 
-          echo ""
-          echo "🔍 Verificação das bibliotecas estáticas"
-          echo "========================================"
+      - name: Verify static libraries
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euo pipefail
 
           OBJDUMP="$(
             find third_party/llvm-build \
@@ -555,28 +645,50 @@ jobs:
 
           FAILED=0
 
-          while read -r lib; do
-            [ -z "$lib" ] && continue
+          while IFS= read -r -d '' lib; do
+            echo ""
+            echo "Checking static library: $lib"
+
+            FILE_INFO="$(file "$lib")"
+            echo "$FILE_INFO"
+
+            # Host archives are not Android ARM64 deliverables.
+            if ! echo "$FILE_INFO" | grep -Eq \
+              'ARM aarch64|ARM64'; then
+              echo "Skipping non-AArch64 archive: $lib"
+              continue
+            fi
 
             HITS="$(
-              "$OBJDUMP" -d "$lib" 2>/dev/null \
-                | grep -Ein \
-                  '\b(ldadd|ldclr|ldeor|ldset|swp[a-z]*|casp?[a-z]*|stadd|stclr|steor|stset|crc32[a-z]*)\b' \
-                | head -10 || true
+              "$OBJDUMP" \
+                --arch-name=aarch64 \
+                -d "$lib" 2>/dev/null |
+                grep -Ein \
+                  '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmmla|bfdot|usmmla|smmla|ptrue|whilelo|whilelt)\b' \
+                | head -20 || true
             )"
 
             if [ -n "$HITS" ]; then
-              echo "❌ Instruções proibidas em: $lib"
+              echo "❌ Forbidden ARM instruction found in $lib:"
               echo "$HITS"
               FAILED=1
+            else
+              echo "✅ ARMv8.0-only: $lib"
             fi
-          done < <(find out/AndroidArmv8 -name '*.a')
+          done < <(
+            find out/AndroidArmv8 \
+              -type f \
+              -name '*.a' \
+              ! -path '*/clang_x64/*' \
+              -print0
+          )
 
           if [ "$FAILED" -ne 0 ]; then
             exit 1
           fi
 
-          echo "✅ Todas as bibliotecas estáticas estão limpas."
+          echo ""
+          echo "✅ Static library verification passed."
 
       - name: Collect libraries
         working-directory: ${{ github.workspace }}/angle
@@ -606,40 +718,24 @@ jobs:
           fi
 
           find package -type f | sort
-
           ls -lh package/lib/*.so
 
-      - name: SHERLOCK — Final absolute verification
+      - name: Final ARMv8.0 package verification
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          OBJDUMP=""
+          OBJDUMP="$(
+            find third_party/llvm-build \
+              -type f \
+              -name llvm-objdump \
+              -perm -111 \
+              | head -1
+          )"
 
-          if command -v llvm-objdump >/dev/null 2>&1; then
-            OBJDUMP="$(command -v llvm-objdump)"
-          fi
-
-          if [ -z "$OBJDUMP" ]; then
-            OBJDUMP="$(
-              find third_party/llvm-build \
-                -type f \
-                -name llvm-objdump \
-                -perm -111 \
-                2>/dev/null \
-                | head -1 || true
-            )"
-          fi
-
-          if [ -z "$OBJDUMP" ] || [ ! -x "$OBJDUMP" ]; then
-            echo "⚠️ llvm-objdump não encontrado — verificação pulada."
-            exit 0
-          fi
-
-          echo "🔍 Verificação final ARMv8.0"
-          echo "=========================="
-          echo "Usando: $OBJDUMP"
+          test -n "$OBJDUMP"
+          test -x "$OBJDUMP"
 
           FAILED=0
 
@@ -647,68 +743,61 @@ jobs:
             [ -f "$file" ] || continue
 
             echo ""
-            echo "Analisando: $file"
+            echo "Analyzing final package file: $file"
 
-            "$OBJDUMP" -d "$file" > /tmp/final_check.asm
+            FILE_INFO="$(file "$file")"
+            echo "$FILE_INFO"
 
-            LSE="$(
-              grep -Ein \
-                '\b(ldadd|ldclr|ldeor|ldset|swp[a-z]*|casp?[a-z]*|stadd|stclr|steor|stset)\b' \
-                /tmp/final_check.asm \
-                | head -20 || true
-            )"
-
-            CRC="$(
-              grep -Ein \
-                '\bcrc32[a-z]*\b' \
-                /tmp/final_check.asm \
-                | head -10 || true
-            )"
-
-            ADV="$(
-              grep -Ein \
-                '\b(sdot|udot|fmlal|fcmla|bfmmla|sve[a-z0-9_]*)\b' \
-                /tmp/final_check.asm \
-                | head -10 || true
-            )"
-
-            if [ -z "$LSE" ] && [ -z "$CRC" ] && [ -z "$ADV" ]; then
-              echo "✅ LIMPO: $file"
-            else
-              echo "❌ Instruções ARMv8.1+ encontradas: $file"
-
-              if [ -n "$LSE" ]; then
-                echo ""
-                echo "LSE:"
-                echo "$LSE"
-              fi
-
-              if [ -n "$CRC" ]; then
-                echo ""
-                echo "CRC:"
-                echo "$CRC"
-              fi
-
-              if [ -n "$ADV" ]; then
-                echo ""
-                echo "ARMv8.2+:"
-                echo "$ADV"
-              fi
-
+            if ! echo "$FILE_INFO" | grep -Eq \
+              'ELF 64-bit LSB shared object, ARM aarch64'; then
+              echo "❌ Invalid Android ARM64 library: $file"
               FAILED=1
+              continue
             fi
 
-            rm -f /tmp/final_check.asm
+            if ! readelf -h "$file" | grep -q 'Class:.*ELF64'; then
+              echo "❌ Not ELF64: $file"
+              FAILED=1
+              continue
+            fi
+
+            if ! readelf -h "$file" | grep -q 'Machine:.*AArch64'; then
+              echo "❌ Not AArch64: $file"
+              FAILED=1
+              continue
+            fi
+
+            "$OBJDUMP" \
+              --arch-name=aarch64 \
+              -d "$file" \
+              > /tmp/final-armv80.asm
+
+            HITS="$(
+              grep -Ein \
+                '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmmla|bfdot|usmmla|smmla|ptrue|whilelo|whilelt|sqaddv|sqsubv)\b' \
+                /tmp/final-armv80.asm \
+                | head -30 || true
+            )"
+
+            if [ -n "$HITS" ]; then
+              echo "❌ ARMv8.1+ instructions found in final package: $file"
+              echo "$HITS"
+              FAILED=1
+            else
+              echo "✅ CLEAN ARMv8.0-A: $file"
+            fi
+
+            rm -f /tmp/final-armv80.asm
           done
 
-          echo ""
-
-          if [ "$FAILED" -eq 0 ]; then
-            echo "✅ VEREDICTO FINAL: bibliotecas compatíveis com ARMv8.0."
-          else
-            echo "❌ VEREDICTO FINAL: instruções ARMv8.1+ detectadas."
+          if [ "$FAILED" -ne 0 ]; then
+            echo ""
+            echo "❌ Final package failed ARMv8.0-A validation."
             exit 1
           fi
+
+          echo ""
+          echo "✅ Final package is ARMv8.0-A compatible."
 
       - name: Package
         working-directory: ${{ github.workspace }}/angle
@@ -717,9 +806,7 @@ jobs:
           set -euxo pipefail
 
           cd package
-
           zip -9 -r ../ANGLE-Android-ARMv8.0.zip .
-
           cd ..
 
           ls -lh ANGLE-Android-ARMv8.0.zip
