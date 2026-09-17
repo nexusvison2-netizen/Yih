@@ -637,6 +637,116 @@ jobs:
 
           ls -lh package/lib/*.so
 
+      - name: Locate ARMv8.1 LSE instructions
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          OBJDUMP=""
+
+          if command -v llvm-objdump >/dev/null 2>&1; then
+            OBJDUMP="$(command -v llvm-objdump)"
+          fi
+
+          if [ -z "$OBJDUMP" ]; then
+            OBJDUMP="$(
+              find third_party/llvm-build \
+                -type f \
+                -name llvm-objdump \
+                -perm -111 \
+                2>/dev/null \
+                | head -1 \
+                || true
+            )"
+          fi
+
+          test -n "$OBJDUMP"
+          test -x "$OBJDUMP"
+
+          echo "========================================"
+          echo "LLVM OBJDUMP"
+          echo "========================================"
+
+          echo "$OBJDUMP"
+          "$OBJDUMP" --version | head -5
+
+          echo "========================================"
+          echo "LSE INSTRUCTIONS IN FINAL GLESv2"
+          echo "========================================"
+
+          "$OBJDUMP" -d \
+            package/lib/libGLESv2_angle.so \
+            > /tmp/libGLESv2_angle.asm
+
+          grep -Ein \
+            '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset)\b' \
+            /tmp/libGLESv2_angle.asm \
+            | head -100 \
+            || true
+
+          echo "========================================"
+          echo "DISASSEMBLY CONTEXT"
+          echo "========================================"
+
+          grep -Ein \
+            -B8 \
+            -A8 \
+            '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset)\b' \
+            /tmp/libGLESv2_angle.asm \
+            | head -300 \
+            || true
+
+          echo "========================================"
+          echo "SEARCHING OBJECT FILES"
+          echo "========================================"
+
+          find out/AndroidArmv8 \
+            -type f \
+            \( -name '*.o' -o -name '*.obj' \) \
+            -print \
+            > /tmp/angle-objects.txt
+
+          echo "Object count:"
+          wc -l /tmp/angle-objects.txt
+
+          FOUND=0
+
+          while IFS= read -r obj; do
+            [ -f "$obj" ] || continue
+
+            if "$OBJDUMP" -d "$obj" 2>/dev/null \
+              | grep -Eiq \
+              '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset)\b'; then
+
+              echo
+              echo "========================================"
+              echo "LSE FOUND IN OBJECT"
+              echo "========================================"
+              echo "$obj"
+
+              "$OBJDUMP" -d "$obj" 2>/dev/null \
+                | grep -Ei \
+                  '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset)\b' \
+                | head -30
+
+              FOUND=1
+            fi
+
+          done < /tmp/angle-objects.txt
+
+          echo
+          echo "========================================"
+          echo "RESULT"
+          echo "========================================"
+
+          if [ "$FOUND" -eq 0 ]; then
+            echo "No individual object with LSE instructions was found."
+            echo "LSE may have been introduced during LTO/link-time optimization."
+          else
+            echo "One or more object files contain LSE instructions."
+          fi
+
       - name: Verify ARM64 binaries
         working-directory: ${{ github.workspace }}/angle
         shell: bash
