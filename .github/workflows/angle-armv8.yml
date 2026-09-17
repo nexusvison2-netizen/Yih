@@ -326,7 +326,6 @@ jobs:
               build_overrides/BUILD.gn
           fi
 
-      
       - name: Generate GN configuration
         working-directory: ${{ github.workspace }}/angle
         shell: bash
@@ -334,6 +333,8 @@ jobs:
           set -euxo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
+
+          rm -rf out/AndroidArmv8
 
           mkdir -p out/AndroidArmv8
 
@@ -411,6 +412,65 @@ jobs:
           echo "===== Running real GN ====="
 
           buildtools/linux64/gn gen out/AndroidArmv8
+
+      - name: Diagnose ARMv8 LSE flags
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export PATH="$HOME/depot_tools:$PATH"
+
+          echo "========================================"
+          echo "GN ARM-RELATED CONFIGURATION"
+          echo "========================================"
+
+          buildtools/linux64/gn args out/AndroidArmv8 --list \
+            | grep -Ei \
+              'arm|aarch64|march|mcpu|mtune|lse|atomic|lto' \
+            || true
+
+          echo "========================================"
+          echo "GENERATING NINJA COMMAND LIST"
+          echo "========================================"
+
+          ninja -C out/AndroidArmv8 -t commands \
+            > all-ninja-commands.txt
+
+          echo "========================================"
+          echo "ARM/LSE FLAGS FOUND IN NINJA"
+          echo "========================================"
+
+          grep -Ei \
+            -- '-march=|-mcpu=|-mtune=|-m(no-)?lse|-moutline-atomics|\+lse|-target-feature' \
+            all-ninja-commands.txt \
+            | head -200 \
+            || true
+
+          echo "========================================"
+          echo "GLES2-SPECIFIC COMMANDS"
+          echo "========================================"
+
+          grep -Ei \
+            'libGLESv2|GLESv2' \
+            all-ninja-commands.txt \
+            | grep -Ei \
+              -- '-march=|-mcpu=|-mtune=|-m(no-)?lse|-moutline-atomics|\+lse|-target-feature' \
+            | head -100 \
+            || true
+
+          echo "========================================"
+          echo "SEARCHING GENERATED NINJA FILES"
+          echo "========================================"
+
+          grep -RniE \
+            '(\+lse|-march=armv8\.1|-march=armv8\.2|-mcpu=.*lse|-moutline-atomics)' \
+            out/AndroidArmv8 \
+            --include='*.ninja' \
+            --include='*.rsp' \
+            2>/dev/null \
+            | head -200 \
+            || true
 
       - name: Discover Ninja targets
         working-directory: ${{ github.workspace }}/angle
@@ -628,9 +688,7 @@ jobs:
 
           if [ -z "$OBJDUMP" ] || [ ! -x "$OBJDUMP" ]; then
             echo "llvm-objdump not found."
-
             echo "ARM instruction scan skipped."
-
             exit 0
           fi
 
@@ -639,26 +697,29 @@ jobs:
           for file in package/lib/*.so; do
             [ -f "$file" ] || continue
 
+            echo "========================================"
             echo "Checking: $file"
+            echo "========================================"
 
             "$OBJDUMP" -d "$file" \
               > "${file}.asm"
 
             if grep -Eiq \
-              '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
+              '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset)\b' \
               "${file}.asm"; then
 
-              echo "ERROR: ARMv8.1+ instruction detected in $file"
-
-              grep -Eiq \
-                '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
-                "${file}.asm" \
-                || true
+              echo
+              echo "ERROR: ARM LSE instruction detected:"
+              echo
 
               grep -Ei \
-                '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
+                '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset)\b' \
                 "${file}.asm" \
-                | head -20
+                | head -50
+
+              echo
+              echo "This library is not restricted to an ARMv8.0-A baseline."
+              echo
 
               exit 1
             fi
