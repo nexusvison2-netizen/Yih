@@ -172,6 +172,23 @@ jobs:
 
           gclient runhooks
 
+      - name: Install Linux host sysroot
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export PATH="$HOME/depot_tools:$PATH"
+
+          python3 build/linux/sysroot_scripts/install-sysroot.py \
+            --arch=amd64
+
+          test -d build/linux/debian_bullseye_amd64-sysroot
+
+          echo "===== Sysroot installed ====="
+
+          du -sh build/linux/debian_bullseye_amd64-sysroot
+
       - name: Ensure real GN binary exists
         working-directory: ${{ github.workspace }}
         shell: bash
