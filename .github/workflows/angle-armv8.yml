@@ -1,445 +1,607 @@
-name: ANGLE Android ARMv8.0 build
+name: ANGLE Android ARMv8.0 - Shared and Static Libraries
 
 on:
   workflow_dispatch:
+
   push:
     branches:
       - main
+      - es3-mobileglues
 
 permissions:
   contents: read
 
+concurrency:
+  group: angle-armv8-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  DEBIAN_FRONTEND: noninteractive
+  DEPOT_TOOLS_UPDATE: "0"
+  DEPOT_TOOLS_METRICS: "0"
+  GCLIENT_PY3: "1"
+  GIT_TERMINAL_PROMPT: "0"
+  CCACHE_DIR: ${{ github.workspace }}/.ccache
+
 jobs:
   build-arm64-v8:
+    name: Build Android arm64-v8a
     runs-on: ubuntu-24.04
-    timeout-minutes: 180
-
-    env:
-      DEPOT_TOOLS_UPDATE: "0"
-      DEPOT_TOOLS_METRICS: "0"
-      GCLIENT_PY3: "1"
-      DEBIAN_FRONTEND: "noninteractive"
+    timeout-minutes: 240
 
     steps:
-
-      - name: Check out ANGLE
+      - name: Checkout repository
         uses: actions/checkout@v4
         with:
           path: angle
           fetch-depth: 1
+          submodules: recursive
+          persist-credentials: true
 
-      - name: Install Linux build dependencies
+      - name: Install Linux dependencies
+        shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
+
           sudo apt-get update
+
           sudo apt-get install -y \
-            bison ccache curl flex git \
-            libasound2-dev libdrm-dev libglib2.0-dev \
-            libnss3-dev libpulse-dev libspeechd-dev \
-            libx11-xcb-dev libxcomposite-dev libxcursor-dev \
-            libxdamage-dev libxi-dev libxrandr-dev \
-            libxshmfence-dev libxtst-dev ninja-build \
-            pkg-config python3 python3-pip \
-            unzip zip file binutils lsb-release
+            autoconf \
+            automake \
+            bison \
+            build-essential \
+            ccache \
+            clang \
+            cmake \
+            curl \
+            flex \
+            file \
+            git \
+            libasound2-dev \
+            libdrm-dev \
+            libglib2.0-dev \
+            libnss3-dev \
+            libpulse-dev \
+            libspeechd-dev \
+            libx11-xcb-dev \
+            libxcomposite-dev \
+            libxcursor-dev \
+            libxdamage-dev \
+            libxi-dev \
+            libxrandr-dev \
+            libxshmfence-dev \
+            libxtst-dev \
+            lld \
+            llvm \
+            ninja-build \
+            pkg-config \
+            python3 \
+            python3-pip \
+            unzip \
+            zip
+
+          ccache --version
+          clang --version
+          ninja --version
+          python3 --version
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: .ccache
+          key: ccache-angle-${{ runner.os }}-${{ github.ref_name }}-${{ github.sha }}
+          restore-keys: |
+            ccache-angle-${{ runner.os }}-${{ github.ref_name }}-
+            ccache-angle-${{ runner.os }}-
+
+      - name: Configure ccache
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          mkdir -p "$CCACHE_DIR"
+
+          ccache --set-config=cache_dir="$CCACHE_DIR"
+          ccache --set-config=max_size=5G
+          ccache --set-config=compression=true
+          ccache --zero-stats
 
       - name: Bootstrap depot_tools
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
           rm -rf "$HOME/depot_tools"
 
-          for i in 1 2 3; do
-            git clone \
-              --depth=1 \
-              https://chromium.googlesource.com/chromium/tools/depot_tools.git \
-              "$HOME/depot_tools" && break
-            echo "Retry $i..."
-            sleep 15
-          done
+          git clone \
+            --depth=1 \
+            https://chromium.googlesource.com/chromium/tools/depot_tools.git \
+            "$HOME/depot_tools"
 
           echo "$HOME/depot_tools" >> "$GITHUB_PATH"
+
           export PATH="$HOME/depot_tools:$PATH"
 
           command -v gclient
           gclient --version
 
-      - name: Sync ANGLE dependencies
+      - name: Create gclient configuration
         working-directory: ${{ github.workspace }}
         shell: bash
+        env:
+          REPOSITORY: ${{ github.server_url }}/${{ github.repository }}.git
+          REVISION: ${{ github.sha }}
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
+
+          cat > .gclient <<EOF
+          solutions = [
+            {
+              "name": "angle",
+              "url": "${REPOSITORY}",
+              "managed": False,
+              "custom_deps": {},
+              "custom_vars": {},
+            },
+          ]
+
+          target_os = ["android"]
+          EOF
+
+          echo "Repository: ${REPOSITORY}"
+          echo "Revision: ${REVISION}"
+          cat .gclient
+
+      - name: Synchronize ANGLE dependencies
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        env:
+          REVISION: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
-
-          python3 -c "
-import pathlib
-pathlib.Path('.gclient').write_text('''solutions = [
-  {
-    \"name\": \"angle\",
-    \"url\": \"https://github.com/denocraftplayerg-max/angle.git\",
-    \"managed\": False,
-    \"custom_deps\": {},
-    \"custom_vars\": {},
-  },
-]
-target_os = [\"android\"]
-''')
-"
 
           gclient sync \
             --force \
             --no-history \
-            --revision "angle@${GITHUB_SHA}"
+            --reset \
+            --delete_unversioned_trees \
+            --revision "angle@${REVISION}"
 
-      - name: Install build deps + runhooks
+      - name: Install ANGLE build dependencies
         working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          if [ -f ./angle/build/install-build-deps.sh ]; then
-            sudo ./angle/build/install-build-deps.sh --no-prompt
+          if [ -f angle/build/install-build-deps.sh ]; then
+            sudo bash angle/build/install-build-deps.sh \
+              --no-prompt \
+              --lib32 \
+              || sudo bash angle/build/install-build-deps.sh --no-prompt
           fi
 
           gclient runhooks
 
-      - name: Verify GN
+      - name: Verify build tools
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
 
           "$HOME/depot_tools/ensure_bootstrap"
 
           command -v gn
+          command -v autoninja
+          command -v ninja
+
           gn --version
+          autoninja --version
+          ninja --version
 
-      - name: Patch angle_static.gni
+      - name: Apply build compatibility fixes
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
-          python3 -c "
-import pathlib
-p = pathlib.Path('gni/angle_static.gni')
-if not p.exists():
-    print('angle_static.gni not found, skipping')
-else:
-    print('BEFORE:', p.read_text())
-    p.write_text('# Copyright 2019 The ANGLE Project Authors.\n# Habilita build estatico para o ANGLE\n\nangle_static_linking = true\nangle_use_static_angle = true\n')
-    print('AFTER:', p.read_text())
-"
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Force pure ARMv8.0 codegen
-        working-directory: ${{ github.workspace }}
-        shell: bash
-        run: |
-          set -euxo pipefail
+          path = Path("BUILD.gn")
 
-          python3 - <<'PYEOF'
-from pathlib import Path
-import re
+          if not path.exists():
+              raise SystemExit("BUILD.gn was not found")
 
-candidates = [
-    Path("angle/build/config/android/BUILD.gn"),
-    Path("angle/build/config/compiler/BUILD.gn"),
-    Path("angle/build/config/arm.gni"),
-]
+          text = path.read_text(encoding="utf-8")
 
-patched = False
+          # Fixes the invalid path:
+          # import("//build_overrides//vulkan_headers.gni")
+          text = text.replace(
+              'import("//build_overrides//vulkan_headers.gni")',
+              'import("//build_overrides/vulkan_headers.gni")',
+          )
 
-for path in candidates:
-    if not path.exists():
-        print(f"skip missing: {path}")
-        continue
+          path.write_text(text, encoding="utf-8")
+          print("BUILD.gn compatibility fix applied")
+          PY
 
-    text = path.read_text(encoding="utf-8", errors="replace")
-    original = text
+          grep -n "vulkan_headers.gni" BUILD.gn
 
-    if path == Path("angle/build/config/android/BUILD.gn"):
-        marker = "  asmflags = cflags\n"
-        addition = (
-            '  if (current_cpu == "arm64") {\n'
-            '    cflags += [\n'
-            '      "-march=armv8-a",\n'
-            '      "-mtune=generic",\n'
-            '      "-mno-outline-atomics",\n'
-            '    ]\n'
-            '  }\n'
-            '  asmflags = cflags\n'
-        )
-        if marker in text and "-mno-outline-atomics" not in text:
-            text = text.replace(marker, addition, 1)
-
-    if path.name == "arm.gni":
-        text = re.sub(r'arm_arch\s*=\s*"[^"]*"', 'arm_arch = "armv8-a"', text)
-        text = re.sub(r'arm_use_crc\s*=\s*true', 'arm_use_crc = false', text)
-
-    if text != original:
-        path.write_text(text, encoding="utf-8")
-        patched = True
-        print(f"patched: {path}")
-
-if patched:
-    print("ARMv8.0 patches applied")
-else:
-    print("No source patch required; GN flags will enforce ARMv8.0")
-PYEOF
-
-      - name: Generate ARMv8.0 GN build
+      - name: Generate GN configuration
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
-          "$HOME/depot_tools/ensure_bootstrap"
 
+          rm -rf out/AndroidArmv8
           mkdir -p out/AndroidArmv8
 
-          python3 -c "
-import pathlib
-pathlib.Path('out/AndroidArmv8/args.gn').write_text('''target_os = \"android\"
-target_cpu = \"arm64\"
+          cat > out/AndroidArmv8/args.gn <<'EOF'
+          target_os = "android"
+          target_cpu = "arm64"
+          current_cpu = "arm64"
 
-is_debug = false
-is_component_build = false
-symbol_level = 0
+          is_debug = false
+          is_component_build = false
+          is_official_build = true
 
-android32_ndk_api_level = 26
-android64_ndk_api_level = 26
+          symbol_level = 0
+          enable_nacl = false
+          use_thin_lto = false
+          use_remoteexec = false
+          is_cfi = false
+          arm_control_flow_integrity = "none"
 
-arm_control_flow_integrity = \"none\"
-use_thin_lto = false
-is_cfi = false
-use_remoteexec = false
+          android32_ndk_api_level = 26
+          android64_ndk_api_level = 26
 
-angle_assert_always_on = false
-angle_build_tests = false
-angle_use_static_angle = true
-angle_static_linking = true
+          angle_build_tests = false
+          build_angle_deqp_tests = false
+          build_angle_end2end_tests_library = false
 
-angle_enable_vulkan = true
-angle_enable_gl = false
+          angle_enable_vulkan = true
+          angle_enable_gl = false
+          angle_enable_d3d11 = false
+          angle_enable_metal = false
+          angle_enable_swiftshader = false
+          angle_enable_null = false
+          angle_enable_wgpu = false
+          angle_enable_cl = false
+          angle_enable_cl_passthrough = false
 
-extra_cflags = [
-  \"-march=armv8-a\",
-  \"-mtune=generic\",
-  \"-mno-outline-atomics\",
-]
-extra_cxxflags = [
-  \"-march=armv8-a\",
-  \"-mtune=generic\",
-  \"-mno-outline-atomics\",
-]
-extra_asmflags = [
-  \"-march=armv8-a\",
-]
-''')
-"
+          angle_enable_vulkan_validation_layers = false
+          angle_enable_vulkan_api_dump_layer = false
+          angle_debug_layers_enabled = false
+          angle_enable_trace = false
+          angle_enable_trace_android_logcat = false
+          angle_enable_trace_events = false
+          angle_enable_memory_alloc_logging = false
+          angle_enable_unwind_backtrace_support = false
+
+          angle_use_partition_alloc = false
+          checkout_angle_partition_alloc = false
+
+          angle_enable_explicit_context = false
+          angle_enable_share_context_lock = false
+          angle_enable_global_mutex_recursion = false
+          angle_enable_global_mutex_load_time_allocate = false
+          angle_enable_context_mutex = true
+          angle_enable_context_mutex_recursion = false
+
+          angle_vulkan_display_mode = "simple"
+          angle_libs_suffix = "_angle"
+
+          extra_cflags = [
+            "-march=armv8-a",
+            "-mtune=generic",
+            "-mno-outline-atomics",
+          ]
+
+          extra_cxxflags = [
+            "-march=armv8-a",
+            "-mtune=generic",
+            "-mno-outline-atomics",
+          ]
+
+          extra_asmflags = [
+            "-march=armv8-a",
+          ]
+          EOF
 
           gn gen out/AndroidArmv8
 
-          echo "GN generation successful."
-          ls -lah out/AndroidArmv8/
+          gn args out/AndroidArmv8 --list > out/AndroidArmv8/gn-args.txt
+
+          test -f out/AndroidArmv8/build.ninja
+          test -f out/AndroidArmv8/args.gn
+
+          echo "GN generation completed successfully"
+          cat out/AndroidArmv8/args.gn
 
       - name: Discover ANGLE targets
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
 
           autoninja \
             -C out/AndroidArmv8 \
             -t targets \
-            > /tmp/angle-targets.txt
+            > "$GITHUB_WORKSPACE/angle-targets.txt"
 
-          echo "===== ANGLE TARGETS ====="
-          grep -Ei 'angle|egl|gles|library|apk' /tmp/angle-targets.txt | head -300 || true
+          test -s "$GITHUB_WORKSPACE/angle-targets.txt"
 
-      - name: Build ANGLE libraries and APK
+          echo "Relevant targets:"
+          grep -E \
+            '(^|/)(libEGL|libGLESv2|libGLESv1_CM)(:|$)' \
+            "$GITHUB_WORKSPACE/angle-targets.txt" \
+            || true
+
+      - name: Build shared ANGLE libraries
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          TARGETS="$(cat /tmp/angle-targets.txt)"
+          autoninja \
+            -C out/AndroidArmv8 \
+            -j2 \
+            libEGL \
+            libGLESv2 \
+            libGLESv1_CM
 
-          if grep -q '^angle_chromium_apk' <<< "$TARGETS"; then
-            autoninja -C out/AndroidArmv8 angle_chromium_apk
-          elif grep -q '^AngleLibraries' <<< "$TARGETS"; then
-            autoninja -C out/AndroidArmv8 AngleLibraries
-          elif grep -q '^libEGL$' <<< "$TARGETS"; then
-            autoninja -C out/AndroidArmv8 libEGL libGLESv2 libGLESv1_CM
-          elif grep -q '^libEGL_angle' <<< "$TARGETS"; then
-            autoninja -C out/AndroidArmv8 libEGL_angle libGLESv2_angle
-          else
-            echo "No known ANGLE library target found."
-            echo "Available targets:"
-            cat /tmp/angle-targets.txt
+          mapfile -t SHARED_LIBRARIES < <(
+            find out/AndroidArmv8 \
+              -type f \
+              -name '*.so' \
+              -not -path '*/obj/*' \
+              -print
+          )
+
+          if [ "${#SHARED_LIBRARIES[@]}" -eq 0 ]; then
+            echo "ERROR: no shared libraries were produced"
+            find out/AndroidArmv8 -type f | sort | tail -200
             exit 1
           fi
+
+          printf '%s\n' "${SHARED_LIBRARIES[@]}"
 
       - name: Build static ANGLE libraries
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          for TARGET in \
-            angle_static \
-            libANGLE_static \
-            libGLESv2_static \
-            libGLESv2_thin_static \
-            libEGL_static; do
+          mapfile -t STATIC_TARGETS < <(
+            grep -Eo \
+              '(^|/)(angle_[A-Za-z0-9_]*|lib[A-Za-z0-9_]*_static)(:|$)' \
+              "$GITHUB_WORKSPACE/angle-targets.txt" \
+              | sed -E 's#(^|/)([^:]+):?$#\2#' \
+              | sort -u \
+              | grep -E \
+                '(^angle_.*static$|^lib.*_static$|^angle_common$|^translator$|^preprocessor$)' \
+              || true
+          )
 
-            if grep -q "^${TARGET}:" /tmp/angle-targets.txt; then
-              echo "Building: $TARGET"
-              autoninja -C out/AndroidArmv8 "$TARGET" \
-                || echo "Failed: $TARGET"
-            else
-              echo "Target not found: $TARGET"
-            fi
+          if [ "${#STATIC_TARGETS[@]}" -gt 0 ]; then
+            echo "Building discovered static targets:"
+            printf '  %s\n' "${STATIC_TARGETS[@]}"
 
-          done
+            autoninja \
+              -C out/AndroidArmv8 \
+              -j2 \
+              "${STATIC_TARGETS[@]}" \
+              || true
+          else
+            echo "No explicit static targets were exposed; collecting static archives generated as dependencies."
+          fi
 
-      - name: Collect .so and .a
-        working-directory: ${{ github.workspace }}/angle
+          mapfile -t STATIC_LIBRARIES < <(
+            find out/AndroidArmv8 \
+              -type f \
+              -name '*.a' \
+              -not -path '*/obj/*' \
+              -print
+          )
+
+          if [ "${#STATIC_LIBRARIES[@]}" -eq 0 ]; then
+            echo "ERROR: no static libraries were produced"
+            find out/AndroidArmv8 -type f | sort | tail -200
+            exit 1
+          fi
+
+          printf '%s\n' "${STATIC_LIBRARIES[@]}"
+
+      - name: Collect shared and static libraries
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
-          rm -rf /tmp/angle-package
+          rm -rf angle-package
           mkdir -p \
-            /tmp/angle-package/arm64-v8a/shared \
-            /tmp/angle-package/arm64-v8a/static \
-            /tmp/angle-package/arm64-v8a/apk
+            angle-package/arm64-v8a/shared \
+            angle-package/arm64-v8a/static
 
-          find out/AndroidArmv8 -type f -name '*.so' -print0 |
-          while IFS= read -r -d '' file; do
-            echo "SO: $file"
-            cp -v "$file" "/tmp/angle-package/arm64-v8a/shared/"
-          done
+          find angle/out/AndroidArmv8 \
+            -type f \
+            -name '*.so' \
+            -not -path '*/obj/*' \
+            -exec cp -v {} angle-package/arm64-v8a/shared/ \;
 
-          find out/AndroidArmv8 -type f -name '*.a' -print0 |
-          while IFS= read -r -d '' file; do
-            echo "A: $file"
-            cp -v "$file" "/tmp/angle-package/arm64-v8a/static/"
-          done
+          find angle/out/AndroidArmv8 \
+            -type f \
+            -name '*.a' \
+            -not -path '*/obj/*' \
+            -exec cp -v {} angle-package/arm64-v8a/static/ \;
 
-          while IFS= read -r -d '' apk; do
-            APK_NAME="$(basename "$apk" .apk)"
-            mkdir -p "/tmp/angle-package/arm64-v8a/apk/$APK_NAME"
-            echo "Extracting: $apk"
-            unzip -o "$apk" '*.so' \
-              -d "/tmp/angle-package/arm64-v8a/apk/$APK_NAME/" || true
-          done < <(find out/AndroidArmv8 -type f -name '*.apk' -print0)
+          SO_COUNT="$(find angle-package/arm64-v8a/shared -type f -name '*.so' | wc -l)"
+          A_COUNT="$(find angle-package/arm64-v8a/static -type f -name '*.a' | wc -l)"
 
-          echo
-          echo "===== SHARED LIBRARIES ====="
-          find /tmp/angle-package/arm64-v8a/shared -type f -name '*.so' -print
+          if [ "$SO_COUNT" -eq 0 ]; then
+            echo "ERROR: package contains no .so files"
+            exit 1
+          fi
 
-          echo
-          echo "===== STATIC LIBRARIES ====="
-          find /tmp/angle-package/arm64-v8a/static -type f -name '*.a' -print
+          if [ "$A_COUNT" -eq 0 ]; then
+            echo "ERROR: package contains no .a files"
+            exit 1
+          fi
 
-          echo
-          echo "===== PACKAGE ====="
-          find /tmp/angle-package -type f -print
+          echo "Shared libraries: $SO_COUNT"
+          echo "Static libraries: $A_COUNT"
 
-          test -n "$(
-            find /tmp/angle-package -type f \( -name '*.so' -o -name '*.a' \) -print -quit
-          )"
+          find angle-package -type f | sort
 
-      - name: Verify ARM64 ELF libraries
+      - name: Verify ARM64 shared libraries
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
-          while IFS= read -r -d '' lib; do
-            echo
-            echo "===== VERIFY ====="
-            echo "$lib"
-            file "$lib"
-            file "$lib" | grep -E 'ELF 64-bit.*(ARM aarch64|aarch64)'
-          done < <(find /tmp/angle-package -type f -name '*.so' -print0)
+          while IFS= read -r -d '' library; do
+            echo "Verifying: $library"
 
-      - name: Verify ARMv8.0 instruction set
-        working-directory: ${{ github.workspace }}/angle
+            file "$library"
+
+            file "$library" | grep -E \
+              'ELF 64-bit.*(ARM aarch64|AArch64|aarch64)'
+          done < <(
+            find angle-package/arm64-v8a/shared \
+              -type f \
+              -name '*.so' \
+              -print0
+          )
+
+      - name: Verify static archives
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
+
+          command -v llvm-ar || command -v ar
+
+          while IFS= read -r -d '' archive; do
+            echo "Verifying: $archive"
+
+            file "$archive"
+
+            if command -v llvm-ar >/dev/null 2>&1; then
+              llvm-ar t "$archive" >/dev/null
+            else
+              ar t "$archive" >/dev/null
+            fi
+          done < <(
+            find angle-package/arm64-v8a/static \
+              -type f \
+              -name '*.a' \
+              -print0
+          )
+
+      - name: Verify ARMv8.0-A instruction set
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
 
           OBJDUMP="$(command -v llvm-objdump || true)"
 
           if [ -z "$OBJDUMP" ]; then
-            OBJDUMP="$(
-              find third_party/llvm-build \
-                -type f -name llvm-objdump -perm -111 \
-                2>/dev/null | head -1 || true
-            )"
-          fi
-
-          if [ -z "$OBJDUMP" ] || [ ! -x "$OBJDUMP" ]; then
-            echo "llvm-objdump unavailable. Skipping instruction-level verification."
+            echo "llvm-objdump not found; skipping disassembly validation"
             exit 0
           fi
 
-          echo "Using: $OBJDUMP"
+          while IFS= read -r -d '' library; do
+            echo "Checking ARMv8.0-A instructions in: $library"
 
-          while IFS= read -r -d '' lib; do
-            echo
-            echo "Checking: $lib"
-            DIS="$lib.dis"
-            "$OBJDUMP" -d "$lib" > "$DIS" || true
+            disassembly="${library}.dis"
+            "$OBJDUMP" -d "$library" > "$disassembly" || true
 
             if grep -Eiq \
-              '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
-              "$DIS"; then
-              echo "ERROR: ARMv8.1+ instruction detected: $lib"
-              grep -Ei \
-                '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
-                "$DIS" | head -50
+              '\b(ldadd|ldclr|ldeor|ldset|swp|casp|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve|whilelo|ptrue|cntb|addvl)\b' \
+              "$disassembly"; then
+              echo "ERROR: ARMv8.1+ instruction detected in $library"
+              grep -Ein \
+                '\b(ldadd|ldclr|ldeor|ldset|swp|casp|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve|whilelo|ptrue|cntb|addvl)\b' \
+                "$disassembly" \
+                | head -50
               exit 1
             fi
 
-            rm -f "$DIS"
-            echo "ARMv8.0 OK: $lib"
-          done < <(find /tmp/angle-package -type f -name '*.so' -print0)
+            rm -f "$disassembly"
+            echo "ARMv8.0-A validation passed: $library"
+          done < <(
+            find angle-package/arm64-v8a/shared \
+              -type f \
+              -name '*.so' \
+              -print0
+          )
 
-      - name: Create maximum-compression ZIP
+      - name: Create ZIP package
+        working-directory: ${{ github.workspace }}
         shell: bash
         run: |
-          set -euxo pipefail
+          set -Eeuo pipefail
 
-          cd /tmp/angle-package
-          zip -9 -X -r "$GITHUB_WORKSPACE/angle-arm64-v8a.zip" arm64-v8a/
+          rm -f angle-arm64-v8a.zip
 
-          cd "$GITHUB_WORKSPACE"
-          echo
-          echo "===== FINAL ZIP ====="
-          ls -lh angle-arm64-v8a.zip
+          zip -9 -X -r \
+            angle-arm64-v8a.zip \
+            angle-package/arm64-v8a
 
-          echo
-          echo "===== ZIP CONTENT ====="
+          test -s angle-arm64-v8a.zip
+
           unzip -l angle-arm64-v8a.zip
 
-      - name: Upload ANGLE ARM64 package
+      - name: Print build summary
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+
+          {
+            echo "## ANGLE Android ARMv8.0 build"
+            echo
+            echo "### Shared libraries (.so)"
+            find angle-package/arm64-v8a/shared \
+              -type f \
+              -name '*.so' \
+              -printf '%f\n' \
+              | sort
+            echo
+            echo "### Static libraries (.a)"
+            find angle-package/arm64-v8a/static \
+              -type f \
+              -name '*.a' \
+              -printf '%f\n' \
+              | sort
+            echo
+            echo "### ZIP"
+            ls -lh angle-arm64-v8a.zip
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload .so, .a and ZIP artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: angle-arm64-armv8-0
+          name: angle-arm64-v8a-armv8-0
           if-no-files-found: error
           compression-level: 0
-          path: angle-arm64-v8a.zip
+          retention-days: 30
+          path: |
+            angle-arm64-v8a.zip
+            angle-package/arm64-v8a/shared/*.so
+            angle-package/arm64-v8a/static/*.a
