@@ -482,6 +482,56 @@ jobs:
             echo "No static library targets discovered."
           fi
 
+      - name: Inspect ANGLE build outputs
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "===== All shared libraries ====="
+
+          find out/AndroidArmv8 \
+            -type f \
+            -name '*.so' \
+            -print \
+            | sort
+
+          echo "===== All static libraries ====="
+
+          find out/AndroidArmv8 \
+            -type f \
+            -name '*.a' \
+            -print \
+            | sort
+
+          echo "===== All ANGLE-related outputs ====="
+
+          find out/AndroidArmv8 \
+            -type f \
+            \( \
+              -iname '*egl*' \
+              -o -iname '*gles*' \
+              -o -iname '*angle*' \
+            \) \
+            -print \
+            | sort
+
+      - name: Inspect Ninja targets
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export PATH="$HOME/depot_tools:$PATH"
+
+          echo "===== Relevant Ninja targets ====="
+
+          ninja -C out/AndroidArmv8 -t targets \
+            | grep -Ei \
+              'egl|gles|angle|lib' \
+            | head -300 \
+            || true
+
       - name: Collect libraries
         working-directory: ${{ github.workspace }}/angle
         shell: bash
