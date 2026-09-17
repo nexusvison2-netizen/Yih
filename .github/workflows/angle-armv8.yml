@@ -326,6 +326,7 @@ jobs:
               build_overrides/BUILD.gn
           fi
 
+      
       - name: Generate GN configuration
         working-directory: ${{ github.workspace }}/angle
         shell: bash
@@ -385,15 +386,16 @@ jobs:
 
           treat_warnings_as_errors = false
 
+          arm_use_neon = true
+          arm_optionally_use_neon = false
+
           extra_cflags = [
             "-march=armv8-a",
-            "-mtune=generic",
             "-mno-outline-atomics",
           ]
 
           extra_cxxflags = [
             "-march=armv8-a",
-            "-mtune=generic",
             "-mno-outline-atomics",
           ]
 
