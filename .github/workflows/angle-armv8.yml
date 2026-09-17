@@ -544,6 +544,32 @@ jobs:
             echo "No static library targets discovered."
           fi
 
+          set -Eeuo pipefail
+
+LLVM_OBJDUMP="$(find third_party/llvm-build -type f -name llvm-objdump | head -1)"
+
+echo "========================================"
+echo "CHECK FINAL LSE"
+echo "========================================"
+
+"$LLVM_OBJDUMP" -d out/AndroidArmv8/libGLESv2_angle.so \
+  > /tmp/gles2.asm
+
+if grep -E '\b(casal|casa|casl|cas|ldadd|ldadda|ldaddal|ldaddl|ldclr|ldclra|ldclral|ldclrl|ldeor|ldeora|ldeoral|ldeorl|ldset|ldseta|ldsetal|ldsetl|swp|swpa|swpal|swpl)\b' \
+    /tmp/gles2.asm; then
+
+    echo
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    echo "LSE DETECTADO"
+    echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!"
+    exit 1
+else
+    echo
+    echo "========================================"
+    echo "OK - ZERO LSE"
+    echo "========================================"
+fi
+
       - name: Inspect ANGLE build outputs
         working-directory: ${{ github.workspace }}/angle
         shell: bash
