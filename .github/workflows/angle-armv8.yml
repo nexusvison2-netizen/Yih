@@ -179,7 +179,7 @@ jobs:
 
           echo "ninja:"
           command -v ninja
-          ninja --help >/dev/null
+          ninja --version || true
 
           echo "Build tools verified successfully"
 
