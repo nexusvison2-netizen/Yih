@@ -134,8 +134,7 @@ jobs:
 
           gclient sync \
             --no-history \
-            --shallow \
-            --nohooks
+            --shallow
 
       - name: Run ANGLE build dependencies
         working-directory: ${{ github.workspace }}/angle
