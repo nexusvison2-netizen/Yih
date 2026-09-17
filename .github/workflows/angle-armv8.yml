@@ -122,6 +122,9 @@ jobs:
               "custom_vars": {},
             },
           ]
+
+          target_os = ["android"]
+          target_os_only = True
           EOF
 
       - name: Sync dependencies
@@ -159,6 +162,19 @@ jobs:
           export PATH="$HOME/depot_tools:$PATH"
 
           gclient runhooks
+
+      - name: Verify Android dependencies
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          echo "Checking Android SDK dependency..."
+
+          test -f third_party/android_sdk/BUILD.gn
+
+          echo "Android SDK BUILD.gn found:"
+          ls -lh third_party/android_sdk/BUILD.gn
 
       - name: Verify build tools
         working-directory: ${{ github.workspace }}/angle
