@@ -13,6 +13,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           path: angle
+          fetch-depth: 1
 
       - name: Install dependencies
         shell: bash
@@ -102,6 +103,8 @@ jobs:
 
           "$HOME/depot_tools/ensure_bootstrap"
 
+          command -v gclient
+          command -v cipd
           command -v gn
           command -v autoninja
           command -v ninja
@@ -127,6 +130,9 @@ jobs:
           target_os_only = True
           EOF
 
+          echo "===== .gclient ====="
+          cat .gclient
+
       - name: Sync dependencies
         working-directory: ${{ github.workspace }}
         shell: bash
@@ -136,6 +142,7 @@ jobs:
           export PATH="$HOME/depot_tools:$PATH"
 
           gclient sync \
+            --force \
             --no-history \
             --shallow
 
@@ -147,11 +154,13 @@ jobs:
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          python3 scripts/install-build-deps.py \
-            --no-prompt \
-            --no-chromeos-fonts \
-            --no-arm \
-            --no-prompt || true
+          if [ -f scripts/install-build-deps.py ]; then
+            python3 scripts/install-build-deps.py \
+              --no-prompt \
+              --no-chromeos-fonts \
+              --no-arm \
+              || true
+          fi
 
       - name: Run hooks
         working-directory: ${{ github.workspace }}
@@ -162,6 +171,83 @@ jobs:
           export PATH="$HOME/depot_tools:$PATH"
 
           gclient runhooks
+
+      - name: Ensure real GN binary exists
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          export PATH="$HOME/depot_tools:$PATH"
+
+          mkdir -p angle/buildtools/linux64
+
+          if [ -x angle/buildtools/linux64/gn ]; then
+            echo "GN already present"
+
+            angle/buildtools/linux64/gn --version
+
+            exit 0
+          fi
+
+          echo "GN missing — installing via CIPD"
+
+          rm -rf /tmp/gn-cipd
+          mkdir -p /tmp/gn-cipd
+
+          printf '%s\n' \
+            '$VerifiedPlatform linux-amd64' \
+            'gn/gn/${platform} latest' \
+            > /tmp/gn.ensure
+
+          cipd ensure \
+            -root /tmp/gn-cipd \
+            -ensure-file /tmp/gn.ensure
+
+          GN_SRC="$(find /tmp/gn-cipd \
+            -type f \
+            -name gn \
+            -perm -111 \
+            | head -1)"
+
+          if [ -z "$GN_SRC" ]; then
+            echo "Primary GN package not found."
+            echo "Trying fallback package..."
+
+            rm -rf /tmp/gn-cipd
+            mkdir -p /tmp/gn-cipd
+
+            printf '%s\n' \
+              '$VerifiedPlatform linux-amd64' \
+              'infra/3pp/tools/gn/${platform} latest' \
+              > /tmp/gn.ensure
+
+            cipd ensure \
+              -root /tmp/gn-cipd \
+              -ensure-file /tmp/gn.ensure
+
+            GN_SRC="$(find /tmp/gn-cipd \
+              -type f \
+              -name gn \
+              -perm -111 \
+              | head -1)"
+          fi
+
+          test -n "$GN_SRC"
+
+          cp -v \
+            "$GN_SRC" \
+            angle/buildtools/linux64/gn
+
+          chmod +x angle/buildtools/linux64/gn
+
+          echo "===== Real GN ====="
+
+          ls -lh angle/buildtools/linux64/gn
+
+          file angle/buildtools/linux64/gn
+
+          angle/buildtools/linux64/gn --version
 
       - name: Verify Android dependencies
         working-directory: ${{ github.workspace }}/angle
@@ -174,6 +260,7 @@ jobs:
           test -f third_party/android_sdk/BUILD.gn
 
           echo "Android SDK BUILD.gn found:"
+
           ls -lh third_party/android_sdk/BUILD.gn
 
       - name: Verify build tools
@@ -184,16 +271,28 @@ jobs:
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          echo "GN:"
+          echo "===== GN wrapper ====="
+
           command -v gn
+
           gn --version
 
-          echo "autoninja:"
+          echo "===== Real ANGLE GN ====="
+
+          test -x buildtools/linux64/gn
+
+          buildtools/linux64/gn --version
+
+          echo "===== autoninja ====="
+
           command -v autoninja
+
           head -n 5 "$(command -v autoninja)" || true
 
-          echo "ninja:"
+          echo "===== ninja ====="
+
           command -v ninja
+
           ninja --version || true
 
           echo "Build tools verified successfully"
@@ -232,7 +331,10 @@ jobs:
           symbol_level = 0
 
           enable_nacl = false
-          use_thin_lto = false
+
+          use_thin_lto = true
+          thin_lto_enable_optimizations = true
+
           use_remoteexec = false
 
           is_cfi = false
@@ -283,7 +385,13 @@ jobs:
           ]
           EOF
 
-          gn gen out/AndroidArmv8
+          echo "===== args.gn ====="
+
+          cat out/AndroidArmv8/args.gn
+
+          echo "===== Running real GN ====="
+
+          buildtools/linux64/gn gen out/AndroidArmv8
 
       - name: Discover Ninja targets
         working-directory: ${{ github.workspace }}/angle
@@ -293,10 +401,15 @@ jobs:
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          ninja -C out/AndroidArmv8 -t targets > ninja-targets.txt
+          ninja -C out/AndroidArmv8 -t targets \
+            > ninja-targets.txt
 
-          grep -E '(^|/)(libEGL|libGLESv2|libGLESv1_CM)(\.so|\.a)?' \
-            ninja-targets.txt || true
+          echo "===== ANGLE targets ====="
+
+          grep -E \
+            '(^|/)(libEGL|libGLESv2|libGLESv1_CM)(\.so|\.a)?' \
+            ninja-targets.txt \
+            || true
 
       - name: Build shared libraries
         working-directory: ${{ github.workspace }}/angle
@@ -322,7 +435,10 @@ jobs:
           ninja -C out/AndroidArmv8 -t targets \
             | grep -E '\.a($| )' \
             | sort -u \
-            > static-targets.txt || true
+            > static-targets.txt \
+            || true
+
+          echo "===== Static targets ====="
 
           cat static-targets.txt || true
 
@@ -338,7 +454,12 @@ jobs:
             while read -r target; do
               [ -z "$target" ] && continue
 
-              autoninja -C out/AndroidArmv8 "$target"
+              echo "Building static target: $target"
+
+              autoninja \
+                -C out/AndroidArmv8 \
+                "$target"
+
             done < static-targets.txt
           else
             echo "No static library targets discovered."
@@ -351,7 +472,10 @@ jobs:
           set -euxo pipefail
 
           rm -rf package
-          mkdir -p package/lib package/include
+
+          mkdir -p \
+            package/lib \
+            package/include
 
           find out/AndroidArmv8 \
             -type f \
@@ -369,7 +493,11 @@ jobs:
             cp -r include/* package/include/ || true
           fi
 
-          find package -type f -print
+          echo "===== Package contents ====="
+
+          find package \
+            -type f \
+            -print
 
       - name: Verify ARM64 binaries
         working-directory: ${{ github.workspace }}/angle
@@ -377,17 +505,23 @@ jobs:
         run: |
           set -euxo pipefail
 
-          find package/lib -type f \
+          find package/lib \
+            -type f \
             \( -name '*.so' -o -name '*.a' \) \
             -print
 
           for file in package/lib/*.so; do
             [ -f "$file" ] || continue
 
+            echo "===== $file ====="
+
             file "$file"
 
             readelf -h "$file" | grep -E \
               'Class:|Machine:'
+
+            readelf -h "$file" | grep -q \
+              'Machine:.*AArch64'
           done
 
       - name: Check ARMv8.0 compatibility
@@ -396,25 +530,64 @@ jobs:
         run: |
           set -euxo pipefail
 
-          if ! command -v llvm-objdump >/dev/null 2>&1; then
-            echo "llvm-objdump not found, skipping instruction scan."
+          OBJDUMP=""
+
+          if command -v llvm-objdump >/dev/null 2>&1; then
+            OBJDUMP="$(command -v llvm-objdump)"
+          fi
+
+          if [ -z "$OBJDUMP" ]; then
+            OBJDUMP="$(
+              find third_party/llvm-build \
+                -type f \
+                -name llvm-objdump \
+                -perm -111 \
+                2>/dev/null \
+                | head -1 \
+                || true
+            )"
+          fi
+
+          if [ -z "$OBJDUMP" ] || [ ! -x "$OBJDUMP" ]; then
+            echo "llvm-objdump not found."
+
+            echo "ARM instruction scan skipped."
+
             exit 0
           fi
+
+          echo "Using objdump: $OBJDUMP"
 
           for file in package/lib/*.so; do
             [ -f "$file" ] || continue
 
             echo "Checking: $file"
 
-            llvm-objdump -d "$file" > "${file}.asm"
+            "$OBJDUMP" -d "$file" \
+              > "${file}.asm"
 
-            if grep -E \
-              'ldadd|ldclr|ldeor|ldset|swp|cas[a-z]*|casp[a-z]*|sve|bfmmla|fmlall' \
+            if grep -Eiq \
+              '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
               "${file}.asm"; then
 
-              echo "Unsupported ARMv8.0+ instruction pattern detected in $file"
+              echo "ERROR: ARMv8.1+ instruction detected in $file"
+
+              grep -Eiq \
+                '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
+                "${file}.asm" \
+                || true
+
+              grep -Ei \
+                '\b(ldadd|ldclr|ldeor|ldset|swp|casp|cas[a-z]*|stadd|stclr|steor|stset|crc32|crc32c|fcmla|fmlal|sdot|udot|bfmmla|sve)\b' \
+                "${file}.asm" \
+                | head -20
+
               exit 1
             fi
+
+            rm -f "${file}.asm"
+
+            echo "OK: $file"
           done
 
       - name: Package
@@ -425,9 +598,13 @@ jobs:
 
           cd package
 
-          zip -r \
+          zip -9 -r \
             ../ANGLE-Android-ARMv8.0.zip \
             .
+
+          cd ..
+
+          ls -lh ANGLE-Android-ARMv8.0.zip
 
       - name: Upload ANGLE package
         uses: actions/upload-artifact@v4
