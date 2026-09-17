@@ -169,8 +169,6 @@ jobs:
 
           export PATH="$HOME/depot_tools:$PATH"
 
-          "$HOME/depot_tools/ensure_bootstrap"
-
           echo "GN:"
           command -v gn
           gn --version
