@@ -544,17 +544,21 @@ jobs:
             package/lib \
             package/include
 
-          find out/AndroidArmv8 \
-            -type f \
-            \( \
-              -name 'libEGL.so' \
-              -o -name 'libGLESv2.so' \
-              -o -name 'libGLESv1_CM.so' \
-              -o -name 'libEGL.a' \
-              -o -name 'libGLESv2.a' \
-              -o -name 'libGLESv1_CM.a' \
-            \) \
-            -exec cp -v {} package/lib/ \;
+          echo "===== Collecting ANGLE shared libraries ====="
+
+          cp -v \
+            out/AndroidArmv8/libEGL_angle.so \
+            package/lib/
+
+          cp -v \
+            out/AndroidArmv8/libGLESv2_angle.so \
+            package/lib/
+
+          cp -v \
+            out/AndroidArmv8/libGLESv1_CM_angle.so \
+            package/lib/
+
+          echo "===== Collecting headers ====="
 
           if [ -d include ]; then
             cp -r include/* package/include/ || true
@@ -564,7 +568,12 @@ jobs:
 
           find package \
             -type f \
-            -print
+            -print \
+            | sort
+
+          echo "===== Shared libraries ====="
+
+          ls -lh package/lib/*.so
 
       - name: Verify ARM64 binaries
         working-directory: ${{ github.workspace }}/angle
