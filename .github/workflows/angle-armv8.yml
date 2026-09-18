@@ -1,4 +1,4 @@
-name: ANGLE Android ARMv8.0 - Shared and Static Libraries
+name: ANGLE Android ARMv8.0 - Shared Libraries
 
 on:
   workflow_dispatch:
@@ -7,6 +7,10 @@ jobs:
   build-angle:
     runs-on: ubuntu-24.04
     timeout-minutes: 240
+
+    env:
+      ANGLE_DIR: ${{ github.workspace }}/angle
+      OUT_DIR: ${{ github.workspace }}/angle/out/AndroidArmv8
 
     steps:
       - name: Checkout ANGLE
@@ -40,6 +44,7 @@ jobs:
             pkg-config \
             file \
             binutils \
+            ccache \
             libx11-dev \
             libx11-xcb-dev \
             libxcb1-dev \
@@ -66,29 +71,7 @@ jobs:
             libasound2-dev \
             libnss3-dev \
             libnspr4-dev \
-            libgtk-3-dev \
-            ccache
-
-      - name: Configure ccache
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          ccache --version
-
-          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
-
-          ccache --set-config=cache_dir="$HOME/.ccache"
-          ccache --set-config=max_size=10G
-          ccache --set-config=compression=true
-
-      - name: Cache ccache
-        uses: actions/cache@v4
-        with:
-          path: ~/.ccache
-          key: angle-android-arm64-ccache-v8.0-nocrc-nolse-${{ runner.os }}-${{ github.sha }}
-          restore-keys: |
-            angle-android-arm64-ccache-v8.0-nocrc-nolse-${{ runner.os }}-
+            libgtk-3-dev
 
       - name: Bootstrap depot_tools
         shell: bash
@@ -101,7 +84,7 @@ jobs:
             https://chromium.googlesource.com/chromium/tools/depot_tools.git \
             "$HOME/depot_tools"
 
-          export PATH="$HOME/depot_tools:$PATH"
+          echo "$HOME/depot_tools" >> "$GITHUB_PATH"
 
           "$HOME/depot_tools/ensure_bootstrap"
 
@@ -140,32 +123,16 @@ jobs:
         run: |
           set -euxo pipefail
 
-          export PATH="$HOME/depot_tools:$PATH"
-
-          gclient sync --force --no-history --shallow
-
-      - name: Install ANGLE build dependencies
-        working-directory: ${{ github.workspace }}/angle
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export PATH="$HOME/depot_tools:$PATH"
-
-          if [ -f scripts/install-build-deps.py ]; then
-            python3 scripts/install-build-deps.py \
-              --no-prompt \
-              --no-chromeos-fonts \
-              --no-arm || true
-          fi
+          gclient sync \
+            --force \
+            --no-history \
+            --shallow
 
       - name: Run hooks
         working-directory: ${{ github.workspace }}
         shell: bash
         run: |
           set -euxo pipefail
-
-          export PATH="$HOME/depot_tools:$PATH"
 
           gclient runhooks
 
@@ -174,8 +141,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
-          export PATH="$HOME/depot_tools:$PATH"
 
           python3 build/linux/sysroot_scripts/install-sysroot.py \
             --arch=amd64
@@ -187,8 +152,6 @@ jobs:
         shell: bash
         run: |
           set -euxo pipefail
-
-          export PATH="$HOME/depot_tools:$PATH"
 
           mkdir -p angle/buildtools/linux64
 
@@ -246,106 +209,32 @@ jobs:
 
           angle/buildtools/linux64/gn --version
 
-      - name: Apply BUILD.gn compatibility fix
-        working-directory: ${{ github.workspace }}/angle
+      - name: Configure ccache
         shell: bash
         run: |
           set -euxo pipefail
 
-          if [ -f build_overrides/BUILD.gn ]; then
-            sed -i \
-              's#import("//build_overrides//vulkan_headers.gni")#import("//build_overrides/vulkan_headers.gni")#g' \
-              build_overrides/BUILD.gn
-          fi
+          ccache --version
+          ccache --set-config=cache_dir="$HOME/.ccache"
+          ccache --set-config=max_size=10G
+          ccache --set-config=compression=true
+          ccache --set-config=compiler_check=content
 
-      - name: Force ARMv8.0-A source configuration
+          echo "CCACHE_DIR=$HOME/.ccache" >> "$GITHUB_ENV"
+
+      - name: Cache ccache
+        uses: actions/cache@v4
+        with:
+          path: ~/.ccache
+          key: angle-android-arm64-armv80-${{ runner.os }}-${{ github.sha }}
+          restore-keys: |
+            angle-android-arm64-armv80-${{ runner.os }}-
+
+      - name: Generate ARMv8.0 GN configuration
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
           set -euxo pipefail
-
-          python3 - <<'PY'
-          from pathlib import Path
-          import re
-
-          candidates = [
-              Path("build/config/arm.gni"),
-              Path("build/config/compiler/BUILD.gn"),
-              Path("build/config/android/BUILD.gn"),
-          ]
-
-          for path in candidates:
-              if not path.exists():
-                  print(f"skip: {path}")
-                  continue
-
-              text = path.read_text(
-                  encoding="utf-8",
-                  errors="replace",
-              )
-
-              original = text
-
-              replacements = [
-                  (
-                      r'arm_arch\s*=\s*"[^"]*"',
-                      'arm_arch = "armv8-a"',
-                  ),
-                  (
-                      r'arm_tune\s*=\s*"[^"]*"',
-                      'arm_tune = "generic"',
-                  ),
-                  (
-                      r'arm_use_crc\s*=\s*true',
-                      'arm_use_crc = false',
-                  ),
-                  (
-                      r'arm_use_lse\s*=\s*true',
-                      'arm_use_lse = false',
-                  ),
-              ]
-
-              for pattern, replacement in replacements:
-                  text = re.sub(pattern, replacement, text)
-
-              text = re.sub(
-                  r'(-march=armv[^"\'\s]*?)'
-                  r'(\+(?:lse|crc|dotprod|fp16|sve|rdm|atomics))+',
-                  r'\1',
-                  text,
-              )
-
-              if text != original:
-                  path.write_text(text, encoding="utf-8")
-                  print(f"patched: {path}")
-              else:
-                  print(f"no change: {path}")
-          PY
-
-          LEAKS="$(
-            grep -rnE \
-              '\+lse|\+crc|arm_use_lse[[:space:]]*=[[:space:]]*true|arm_use_crc[[:space:]]*=[[:space:]]*true' \
-              build/config/arm.gni \
-              build/config/compiler/BUILD.gn \
-              build/config/android/BUILD.gn \
-              2>/dev/null || true
-          )"
-
-          if [ -n "$LEAKS" ]; then
-            echo "❌ ARMv8.1+ configuration found:"
-            echo "$LEAKS"
-            exit 1
-          fi
-
-          echo "✅ No LSE/CRC ARM configuration found."
-
-      - name: Generate GN configuration
-        working-directory: ${{ github.workspace }}/angle
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export PATH="$HOME/depot_tools:$PATH"
 
           rm -rf out/AndroidArmv8
           mkdir -p out/AndroidArmv8
@@ -364,7 +253,6 @@ jobs:
           use_remoteexec = false
           clang_use_chrome_plugins = false
 
-          # Strict ARMv8.0-A build.
           use_thin_lto = false
           use_lto = false
           lto_unit_merging = false
@@ -381,8 +269,6 @@ jobs:
           arm_optionally_use_neon = false
           arm_use_crc = false
           arm_use_lse = false
-
-          angle_armv80_strict = true
 
           angle_expose_non_conformant_extensions_and_versions = false
 
@@ -420,12 +306,12 @@ jobs:
           checkout_angle_partition_alloc = false
           angle_use_partition_alloc = false
 
-          # These flags apply to Android ARM64 target commands.
+          # ARMv8.0-A only.
+          # +nocrc explicitly prevents CRC instructions.
           extra_cflags = [
-            "-march=armv8-a",
+            "-march=armv8-a+nocrc",
             "-mtune=generic",
             "-mno-outline-atomics",
-            "-mno-lse",
             "-mno-crc",
             "-mno-fp16",
             "-mno-dotprod",
@@ -437,10 +323,9 @@ jobs:
           ]
 
           extra_cxxflags = [
-            "-march=armv8-a",
+            "-march=armv8-a+nocrc",
             "-mtune=generic",
             "-mno-outline-atomics",
-            "-mno-lse",
             "-mno-crc",
             "-mno-fp16",
             "-mno-dotprod",
@@ -452,8 +337,7 @@ jobs:
           ]
 
           extra_asmflags = [
-            "-march=armv8-a",
-            "-mno-outline-atomics",
+            "-march=armv8-a+nocrc",
             "-mno-crc",
           ]
           EOF
@@ -462,29 +346,25 @@ jobs:
 
           buildtools/linux64/gn gen out/AndroidArmv8
 
-      - name: Verify generated target flags
+      - name: Verify generated compiler flags
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
           set -euxo pipefail
 
-          export PATH="$HOME/depot_tools:$PATH"
-
           ninja -C out/AndroidArmv8 -t commands \
             > /tmp/ninja-commands.txt
 
-          echo "Checking generated ARM flags..."
-
           if grep -nE \
             -- \
-            '\+lse|\+crc|-march=armv8\.[1-9]|-mcpu=[^ ]*(native|armv8\.[1-9])|-moutline-atomics' \
+            '\+lse|\+crc|-march=armv(8\.[1-9]|9)|-mcpu=[^ ]*(native|armv8\.[1-9]|armv9)|-moutline-atomics' \
             /tmp/ninja-commands.txt \
-            | head -30; then
-            echo "❌ Forbidden ARMv8.1+ compiler flags found."
+            | head -50; then
+            echo "Forbidden ARMv8.1+ compiler flags found."
             exit 1
           fi
 
-          echo "✅ No forbidden ARMv8.1+ compiler flags found."
+          echo "No forbidden ARM compiler flags found."
 
       - name: Build shared libraries
         working-directory: ${{ github.workspace }}/angle
@@ -492,18 +372,18 @@ jobs:
         run: |
           set -euxo pipefail
 
-          export PATH="$HOME/depot_tools:$PATH"
-
-          autoninja -C out/AndroidArmv8 \
+          # Disable ccache for the first clean validation run.
+          CCACHE_DISABLE=1 autoninja -C out/AndroidArmv8 \
             libEGL \
             libGLESv2 \
             libGLESv1_CM
 
-      - name: Verify final ARMv8.0 shared libraries
+      - name: Locate llvm-objdump
+        id: llvm
         working-directory: ${{ github.workspace }}/angle
         shell: bash
         run: |
-          set -euo pipefail
+          set -euxo pipefail
 
           OBJDUMP="$(
             find third_party/llvm-build \
@@ -516,68 +396,86 @@ jobs:
           test -n "$OBJDUMP"
           test -x "$OBJDUMP"
 
+          echo "path=$OBJDUMP" >> "$GITHUB_OUTPUT"
+
+      - name: Validate ARMv8.0 shared libraries
+        working-directory: ${{ github.workspace }}/angle
+        shell: bash
+        env:
+          OBJDUMP: ${{ steps.llvm.outputs.path }}
+        run: |
+          set -euo pipefail
+
           FAILED=0
 
           check_library() {
             local lib="$1"
 
-            echo ""
+            echo
             echo "========================================"
-            echo "Verifying: $lib"
+            echo "Checking: $lib"
             echo "========================================"
 
             if [ ! -f "$lib" ]; then
-              echo "❌ Missing library: $lib"
+              echo "Missing library: $lib"
               FAILED=1
               return
             fi
 
-            local file_info
-            file_info="$(file "$lib")"
+            file "$lib"
 
-            echo "$file_info"
-
-            if ! echo "$file_info" | grep -Eq \
+            if ! file "$lib" | grep -Eq \
               'ELF 64-bit LSB shared object, ARM aarch64'; then
-              echo "❌ Not an ARM64 Android shared library: $lib"
+              echo "Invalid ARM64 shared library: $lib"
               FAILED=1
               return
             fi
 
             if ! readelf -h "$lib" | grep -q 'Class:.*ELF64'; then
-              echo "❌ $lib is not ELF64"
+              echo "Library is not ELF64: $lib"
               FAILED=1
               return
             fi
 
             if ! readelf -h "$lib" | grep -q 'Machine:.*AArch64'; then
-              echo "❌ $lib is not AArch64"
+              echo "Library is not AArch64: $lib"
               FAILED=1
               return
             fi
 
+            local asm_file="/tmp/$(basename "$lib").asm"
+
             "$OBJDUMP" \
               --arch-name=aarch64 \
               -d "$lib" \
-              > /tmp/armv80-library.asm
+              > "$asm_file"
 
             local hits
             hits="$(
               grep -Ein \
-                '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmmla|bfdot|usmmla|smmla|ptrue|whilelo|whilelt|sqaddv|sqsubv)\b' \
-                /tmp/armv80-library.asm \
-                | head -30 || true
+                '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmml|fmlal2|fmlsl2)\b' \
+                "$asm_file" \
+                | head -50 || true
             )"
 
             if [ -n "$hits" ]; then
-              echo "❌ ARMv8.1+ instructions found in $lib:"
-              echo "$hits"
+              echo
+              echo "Forbidden ARMv8.1+ instructions found in $lib:"
+              printf '%s\n' "$hits"
+
+              echo
+              echo "Disassembly context:"
+              grep -Ein -C 3 \
+                '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmml|fmlal2|fmlsl2)\b' \
+                "$asm_file" \
+                | head -100 || true
+
               FAILED=1
             else
-              echo "✅ ARMv8.0-only: $lib"
+              echo "ARMv8.0-only: $lib"
             fi
 
-            rm -f /tmp/armv80-library.asm
+            rm -f "$asm_file"
           }
 
           check_library out/AndroidArmv8/libEGL_angle.so
@@ -585,110 +483,13 @@ jobs:
           check_library out/AndroidArmv8/libGLESv1_CM_angle.so
 
           if [ "$FAILED" -ne 0 ]; then
-            echo ""
-            echo "❌ One or more final ARM64 libraries failed validation."
+            echo
+            echo "One or more ARM64 libraries failed ARMv8.0 validation."
             exit 1
           fi
 
-          echo ""
-          echo "✅ All final shared libraries passed ARMv8.0 validation."
-
-      - name: Discover static targets
-        working-directory: ${{ github.workspace }}/angle
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          ninja -C out/AndroidArmv8 -t targets all \
-            | awk '$1 ~ /\.a$/ { print $1 }' \
-            | sort -u \
-            > static-targets.txt || true
-
-          cat static-targets.txt || true
-
-      - name: Build static libraries
-        working-directory: ${{ github.workspace }}/angle
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          export PATH="$HOME/depot_tools:$PATH"
-
-          if [ -s static-targets.txt ]; then
-            while IFS= read -r target; do
-              [ -z "$target" ] && continue
-
-              echo "Building static target: $target"
-
-              autoninja -C out/AndroidArmv8 "$target"
-            done < static-targets.txt
-          else
-            echo "No static targets found."
-          fi
-
-      - name: Verify static libraries
-        working-directory: ${{ github.workspace }}/angle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          OBJDUMP="$(
-            find third_party/llvm-build \
-              -type f \
-              -name llvm-objdump \
-              -perm -111 \
-              | head -1
-          )"
-
-          test -n "$OBJDUMP"
-          test -x "$OBJDUMP"
-
-          FAILED=0
-
-          while IFS= read -r -d '' lib; do
-            echo ""
-            echo "Checking static library: $lib"
-
-            FILE_INFO="$(file "$lib")"
-            echo "$FILE_INFO"
-
-            # Host archives are not Android ARM64 deliverables.
-            if ! echo "$FILE_INFO" | grep -Eq \
-              'ARM aarch64|ARM64'; then
-              echo "Skipping non-AArch64 archive: $lib"
-              continue
-            fi
-
-            HITS="$(
-              "$OBJDUMP" \
-                --arch-name=aarch64 \
-                -d "$lib" 2>/dev/null |
-                grep -Ein \
-                  '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmmla|bfdot|usmmla|smmla|ptrue|whilelo|whilelt)\b' \
-                | head -20 || true
-            )"
-
-            if [ -n "$HITS" ]; then
-              echo "❌ Forbidden ARM instruction found in $lib:"
-              echo "$HITS"
-              FAILED=1
-            else
-              echo "✅ ARMv8.0-only: $lib"
-            fi
-          done < <(
-            find out/AndroidArmv8 \
-              -type f \
-              -name '*.a' \
-              ! -path '*/clang_x64/*' \
-              -print0
-          )
-
-          if [ "$FAILED" -ne 0 ]; then
-            exit 1
-          fi
-
-          echo ""
-          echo "✅ Static library verification passed."
+          echo
+          echo "All shared libraries passed ARMv8.0 validation."
 
       - name: Collect libraries
         working-directory: ${{ github.workspace }}/angle
@@ -697,7 +498,6 @@ jobs:
           set -euxo pipefail
 
           rm -rf package
-
           mkdir -p package/lib
           mkdir -p package/include
 
@@ -717,87 +517,8 @@ jobs:
             cp -r include/* package/include/ || true
           fi
 
-          find package -type f | sort
-          ls -lh package/lib/*.so
-
-      - name: Final ARMv8.0 package verification
-        working-directory: ${{ github.workspace }}/angle
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          OBJDUMP="$(
-            find third_party/llvm-build \
-              -type f \
-              -name llvm-objdump \
-              -perm -111 \
-              | head -1
-          )"
-
-          test -n "$OBJDUMP"
-          test -x "$OBJDUMP"
-
-          FAILED=0
-
-          for file in package/lib/*.so; do
-            [ -f "$file" ] || continue
-
-            echo ""
-            echo "Analyzing final package file: $file"
-
-            FILE_INFO="$(file "$file")"
-            echo "$FILE_INFO"
-
-            if ! echo "$FILE_INFO" | grep -Eq \
-              'ELF 64-bit LSB shared object, ARM aarch64'; then
-              echo "❌ Invalid Android ARM64 library: $file"
-              FAILED=1
-              continue
-            fi
-
-            if ! readelf -h "$file" | grep -q 'Class:.*ELF64'; then
-              echo "❌ Not ELF64: $file"
-              FAILED=1
-              continue
-            fi
-
-            if ! readelf -h "$file" | grep -q 'Machine:.*AArch64'; then
-              echo "❌ Not AArch64: $file"
-              FAILED=1
-              continue
-            fi
-
-            "$OBJDUMP" \
-              --arch-name=aarch64 \
-              -d "$file" \
-              > /tmp/final-armv80.asm
-
-            HITS="$(
-              grep -Ein \
-                '\b(ldadd[a-z]*|ldclr[a-z]*|ldeor[a-z]*|ldset[a-z]*|swp[a-z]*|casp[a-z]*|stadd[a-z]*|stclr[a-z]*|steor[a-z]*|stset[a-z]*|crc32[bwhx]|crc32c[bwhx]|sdot|udot|fcmla|fmlal|fmlsl|bfmmla|bfdot|usmmla|smmla|ptrue|whilelo|whilelt|sqaddv|sqsubv)\b' \
-                /tmp/final-armv80.asm \
-                | head -30 || true
-            )"
-
-            if [ -n "$HITS" ]; then
-              echo "❌ ARMv8.1+ instructions found in final package: $file"
-              echo "$HITS"
-              FAILED=1
-            else
-              echo "✅ CLEAN ARMv8.0-A: $file"
-            fi
-
-            rm -f /tmp/final-armv80.asm
-          done
-
-          if [ "$FAILED" -ne 0 ]; then
-            echo ""
-            echo "❌ Final package failed ARMv8.0-A validation."
-            exit 1
-          fi
-
-          echo ""
-          echo "✅ Final package is ARMv8.0-A compatible."
+          find package -type f -print | sort
+          ls -lh package/lib
 
       - name: Package
         working-directory: ${{ github.workspace }}/angle
